@@ -64,7 +64,32 @@ type TransferTxResult struct {
 	ToEntry     Entry    `json:"to_entry"`
 }
 
-func (store *Store) TransferTx(ctx context.Context, arg CreateTransferParams) (TransferTxResult, error) {
+func transferMoney(
+	ctx context.Context,
+	q *Queries,
+	account1Id int64,
+	account2Id int64,
+	amount1 int64,
+	amount2 int64,
+) (account1 Account, account2 Account, err error) {
+	account1, err = q.AddAccountBalance(ctx, AddAccountBalanceParams{
+		ID:     account1Id,
+		Amount: amount1,
+	})
+
+	if err != nil {
+		return
+	}
+
+	account2, err = q.AddAccountBalance(ctx, AddAccountBalanceParams{
+		ID:     account2Id,
+		Amount: amount2,
+	})
+
+	return
+}
+
+func (store *Store) TransferTx(ctx context.Context, arg TransferTxParams) (TransferTxResult, error) {
 	var result TransferTxResult
 
 	err := store.execTx(ctx, func(q *Queries) error {
@@ -96,21 +121,31 @@ func (store *Store) TransferTx(ctx context.Context, arg CreateTransferParams) (T
 		}
 
 		// get account -> update its balance
-		result.FromAccount, err = q.AddAccountBalance(ctx, AddAccountBalanceParams{
-			ID:     arg.FromAccountID,
-			Amount: -arg.Amount,
-		})
-		if err != nil {
-			return err
+		// avoid deadlock by executing queries in order
+		if arg.FromAccountID < arg.ToAccountID {
+			result.FromAccount, result.ToAccount, err = transferMoney(ctx, q, arg.FromAccountID, arg.ToAccountID, -arg.Amount, arg.Amount)
+			if err != nil {
+				return err
+			}
+		} else {
+			result.ToAccount, result.FromAccount, err = transferMoney(ctx, q, arg.ToAccountID, arg.FromAccountID, arg.Amount, -arg.Amount)
+			if err != nil {
+				return err
+			}
 		}
 
-		result.ToAccount, err = q.AddAccountBalance(ctx, AddAccountBalanceParams{
-			ID:     arg.ToAccountID,
-			Amount: arg.Amount,
-		})
-		if err != nil {
-			return err
-		}
+		// result.FromAccount, err = q.AddAccountBalance(ctx, AddAccountBalanceParams{
+		// 	ID:     arg.FromAccountID,
+		// 	Amount: -arg.Amount,
+		// })
+
+		// result.ToAccount, err = q.AddAccountBalance(ctx, AddAccountBalanceParams{
+		// 	ID:     arg.ToAccountID,
+		// 	Amount: arg.Amount,
+		// })
+		// if err != nil {
+		// 	return err
+		// }
 
 		return nil
 	})
